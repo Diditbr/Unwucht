@@ -1,0 +1,652 @@
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Unwucht-Rechner MS v7</title>
+    
+    <!-- STABILISIERUNG: Wechsel auf Cloudflare CDN (schneller & zuverlässiger als unpkg) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; -webkit-font-smoothing: antialiased; }
+        .canvas-grid { background-image: radial-gradient(#64748b 1px, transparent 1px); background-size: 20px 20px; }
+        
+        /* Custom Range Slider */
+        input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #3b82f6; margin-top: -6px; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; background: #475569; border-radius: 2px; }
+
+        /* Print Styles - Hidden by default */
+        .print-container {
+            position: fixed; top: 0; left: 0;
+            width: 297mm; min-height: 210mm;
+            background: white;
+            z-index: -1000; opacity: 0; pointer-events: none;
+            display: flex; flex-direction: column;
+            padding: 15mm; box-sizing: border-box;
+            font-family: sans-serif; color: #0f172a;
+        }
+        /* Visible during export */
+        body.printing-p1 #print-page-1 { z-index: 9999; opacity: 1; }
+        body.printing-p2 #print-page-2 { z-index: 9999; opacity: 1; }
+
+        /* Print Typography */
+        .print-header { border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+        .print-title { font-size: 24px; font-weight: bold; }
+        .print-meta { font-size: 10px; color: #64748b; }
+        .print-section { font-size: 14px; font-weight: 700; border-bottom: 1px solid #cbd5e1; margin-top: 20px; margin-bottom: 10px; padding-bottom: 4px; }
+        .print-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+        .print-table th { text-align: left; padding: 4px; border-bottom: 2px solid #cbd5e1; background: #f8fafc; }
+        .print-table td { padding: 4px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+        .print-footer { margin-top: auto; border-top: 1px solid #cbd5e1; padding-top: 10px; text-align: center; font-size: 9px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <!-- LADE-INDIKATOR (Sichtbar bis React übernimmt) -->
+    <div id="root">
+        <div style="height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: sans-serif; color: #475569;">
+            <div style="font-size: 24px; font-weight: bold; margin-bottom: 10px;">Unwucht-Rechner MS v7</div>
+            <div style="margin-bottom: 20px;">System wird initialisiert...</div>
+            <div style="font-size: 12px; color: #94a3b8;">Lade Module von Cloudflare CDN...</div>
+        </div>
+    </div>
+
+    <!-- GLOBALER FEHLER-HANDLER (Fängt Script-Fehler ab) -->
+    <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            const root = document.getElementById('root');
+            root.innerHTML = `
+                <div style="padding: 20px; margin: 20px; border: 1px solid #ef4444; background: #fef2f2; color: #b91c1c; font-family: sans-serif; border-radius: 8px;">
+                    <h3 style="margin-top:0; font-weight:bold;">Kritischer Startfehler</h3>
+                    <p>Das System konnte nicht geladen werden. Bitte prüfen Sie Ihre Internetverbindung (CDN Zugriff).</p>
+                    <div style="background:white; padding:10px; border:1px solid #fca5a5; font-family:monospace; margin-top:10px; font-size:12px;">
+                        ${message}<br>
+                        Quelle: ${source}:${lineno}
+                    </div>
+                </div>
+            `;
+        };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef, Component } = React;
+
+        // --- ERROR BOUNDARY ---
+        class ErrorBoundary extends Component {
+            constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            render() {
+                if (this.state.hasError) return <div className="p-6 bg-red-50 text-red-800 border border-red-200 rounded m-4"><h3>Ein Fehler ist aufgetreten</h3><pre className="text-xs mt-2">{this.state.error.toString()}</pre></div>;
+                return this.props.children;
+            }
+        }
+
+        // --- ICONS ---
+        const Icon = ({ d, size=20, col="currentColor", className }) => <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>;
+        const Icons = {
+            Layer: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
+            Wrench: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
+            Drill: "M14 7l3-3m-7 13l-6 4 1-4m11.5-5l3.1-3.1a1.4 1.4 0 0 0 0-2l-3-3a1.4 1.4 0 0 0-2 0L11.5 7m-4.5 4.5l-5 5v3h3l5-5",
+            Save: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z M17 21v-8H7v8 M7 3v5h8",
+            Check: "M22 11.08V12a10 10 0 1 1-5.93-9.14 M9 11l3 3L22 4",
+            X: "M18 6L6 18M6 6l12 12",
+            Eye: "M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z",
+            Help: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3 M12 17h.01"
+        };
+
+        const emptyResults = {
+            components: { shaft: {Mass:0}, cyl1: {Mass:0}, cyl2: {Mass:0} },
+            total: { Mass:0 }, staticRes: { mag:0 },
+            iso: { u_permissible:0, isWithinTolerance:false }, momentRes: { mag:0 },
+            bearingA: { mag:0, angle:0 }, bearingB: { mag:0, angle:0 },
+            k1: { m:0, a:0, d:0, aDrill:0 }, k2: { m:0, a:0, d:0, aDrill:0 }
+        };
+
+        // --- MATH ---
+        const toRad = d => d * Math.PI / 180;
+        const toDeg = r => r * 180 / Math.PI;
+        const toPolar = (x, y) => { 
+            if(!isFinite(x)||!isFinite(y)) return {mag:0, angle:0};
+            const m = Math.sqrt(x*x+y*y); 
+            let a = toDeg(Math.atan2(y,x)); if(a<0) a+=360; 
+            return {mag:m, angle:a}; 
+        };
+        const toCart = (r, a) => ({x:r*Math.cos(toRad(a||0)), y:r*Math.sin(toRad(a||0))});
+        const intZ = (z1, z2) => 0.5*(z2*z2 - z1*z1);
+        const intZ2 = (z1, z2) => (1.0/3.0)*(Math.pow(z2,3) - Math.pow(z1,3));
+        const calculateForce = (U, rpm) => rpm<=0?0:(U*1e-6)*Math.pow((2*Math.PI*rpm)/60,2);
+
+        // --- STABLE INPUT COMPONENT (Buffered) ---
+        const BufferedInput = ({ val, set, className="", unit }) => {
+            const [localVal, setLocalVal] = useState(val);
+            const [isEditing, setIsEditing] = useState(false);
+
+            useEffect(() => {
+                if (!isEditing) setLocalVal(val);
+            }, [val, isEditing]);
+
+            const commit = () => {
+                const n = parseFloat(String(localVal).replace(',', '.'));
+                if (!isNaN(n)) {
+                    set(n); 
+                    setLocalVal(n);
+                } else {
+                    setLocalVal(val);
+                }
+                setIsEditing(false);
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    e.target.blur();
+                }
+            };
+
+            return (
+                <div className="flex items-center gap-1">
+                    <input 
+                        type="text" 
+                        inputMode="decimal" 
+                        value={localVal}
+                        onChange={e => setLocalVal(e.target.value)}
+                        onFocus={() => setIsEditing(true)}
+                        onBlur={commit}
+                        onKeyDown={handleKeyDown}
+                        className={`border rounded px-2 py-1 text-right text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none transition-colors ${isEditing ? 'border-blue-400 bg-blue-50' : 'border-slate-300'} ${className}`} 
+                    />
+                    {unit && <span className="text-xs text-slate-400 w-8 text-right">{unit}</span>}
+                </div>
+            );
+        };
+
+        const InputRow = ({ label, val, set, unit }) => (
+            <div className="flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
+                <span className="text-sm text-slate-600">{label}</span>
+                <BufferedInput val={val} set={set} unit={unit} className="w-20" />
+            </div>
+        );
+        
+        const Section = ({ title, children, col="slate" }) => (
+            <div className={`bg-white p-4 rounded-lg shadow-sm border border-${col}-200 mb-4`}>
+                <h3 className={`font-bold text-xs text-${col}-600 uppercase mb-3 border-b pb-1`}>{title}</h3>
+                {children}
+            </div>
+        );
+
+        const OffsetInput = ({ label, obj, setObj }) => (
+            <div className="bg-slate-50 p-2 rounded border border-slate-200 mb-2">
+                <div className="text-xs font-bold text-slate-500 mb-1">{label}</div>
+                <div className="grid grid-cols-2 gap-2">
+                    <InputRow label="Radius r" val={obj.r} set={v => setObj({...obj, r:v})} unit="mm" />
+                    <InputRow label="Winkel φ" val={obj.ang} set={v => setObj({...obj, ang:v})} unit="°" />
+                </div>
+            </div>
+        );
+
+        // --- DOKUMENTATIONS-MODAL ---
+        const HelpModal = ({ onClose }) => (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={onClose}>
+                <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-xl shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+                    <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0">
+                        <h2 className="text-lg font-bold flex items-center gap-2">
+                            <Icon d={Icons.Layer} size={20} col="white"/> Technische Dokumentation
+                        </h2>
+                        <button onClick={onClose} className="hover:bg-white/20 p-1 rounded transition-colors"><Icon d={Icons.X} size={20} col="white"/></button>
+                    </div>
+                    <div className="p-8 overflow-y-auto flex-1 prose prose-slate max-w-none text-sm leading-relaxed">
+                        <h3 className="font-bold text-lg mb-2">1. Starrkörper-Modell</h3>
+                        <p>Die Berechnung nimmt einen starren Rotor an ($n \ll n_{krit}$). Die Biegelinie wird vernachlässigt.</p>
+                        <h3 className="font-bold text-lg mb-2 mt-4">2. Formeln</h3>
+                        <ul className="list-disc pl-5 mb-4">
+                            <li>Statische Unwucht: $\int \rho \cdot A \cdot e(z) dz$</li>
+                            <li>Momentenunwucht: $\int \rho \cdot A \cdot e(z) \cdot z dz$</li>
+                            <li>Lagerkräfte: Berechnung über Momentengleichgewicht um Lagerpunkte.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        );
+
+        // --- MAIN APP ---
+        function App() {
+            // State - FIX: Zylinder 2 mit requested values 0.1 / 0° und 0.1 / 180°
+            const [shaft, setShaft] = useState({ d: 8, rho: 7.85, len: 80 });
+            const [cyl1, setCyl1] = useState({ zStart: 25, zEnd: 45, d_outer: 15, rho: 7.85, offset1: {r:0, ang:0}, offset2: {r:0, ang:0} });
+            const [cyl2, setCyl2] = useState({ zStart: 20, zEnd: 50, d_outer: 22, rho: 4.8, offset1: {r:0.1, ang:0}, offset2: {r:0.1, ang:180}, gapMode: 'shaft' });
+            const [bearings, setBearings] = useState({ zA: 10, zB: 75 });
+            const [corr, setCorr] = useState({ k1: {z:20, r:12, d:5, rho:7.85, tip:118}, k2: {z:50, r:12, d:5, rho:7.85, tip:118} });
+            const [mode, setMode] = useState('mass'); 
+            const [rpm, setRpm] = useState(1500);
+            const [iso, setIso] = useState(6.3);
+            const [zoom, setZoom] = useState(1);
+            const [exzScale, setExzScale] = useState(1);
+            const [isExporting, setIsExporting] = useState(false);
+            const [showHelp, setShowHelp] = useState(false);
+
+            // Berechnung
+            const results = useMemo(() => {
+                try {
+                    const finite = value => Number.isFinite(Number(value));
+                    const validPositive = value => finite(value) && Number(value) > 0;
+                    const validationErrors = [];
+                    if (!validPositive(shaft.len) || !validPositive(shaft.d) || !validPositive(shaft.rho)) validationErrors.push('Die Achsenwerte müssen größer als 0 sein.');
+                    if (!finite(cyl1.zStart) || !finite(cyl1.zEnd) || cyl1.zEnd <= cyl1.zStart || cyl1.zStart < 0 || cyl1.zEnd > shaft.len) validationErrors.push('Zylinder 1 muss innerhalb der Achse liegen und eine positive Länge haben.');
+                    if (!finite(cyl2.zStart) || !finite(cyl2.zEnd) || cyl2.zEnd <= cyl2.zStart || cyl2.zStart < 0 || cyl2.zEnd > shaft.len) validationErrors.push('Zylinder 2 muss innerhalb der Achse liegen und eine positive Länge haben.');
+                    if (!validPositive(cyl1.d_outer) || !validPositive(cyl1.rho) || !validPositive(cyl2.d_outer) || !validPositive(cyl2.rho)) validationErrors.push('Durchmesser und Dichten müssen größer als 0 sein.');
+                    if (!finite(bearings.zA) || !finite(bearings.zB) || bearings.zA < 0 || bearings.zA > shaft.len || bearings.zB < 0 || bearings.zB > shaft.len || Math.abs(bearings.zB - bearings.zA) < 1e-3) validationErrors.push('Die Lager müssen innerhalb der Achse liegen und unterschiedliche Positionen haben.');
+                    if (!finite(corr.k1.z) || !finite(corr.k2.z) || corr.k1.z < 0 || corr.k1.z > shaft.len || corr.k2.z < 0 || corr.k2.z > shaft.len || Math.abs(corr.k2.z - corr.k1.z) < 1e-3) validationErrors.push('Die Korrekturebenen müssen innerhalb der Achse liegen und unterschiedliche Positionen haben.');
+                    if (!validPositive(corr.k1.r) || !validPositive(corr.k2.r)) validationErrors.push('Die Korrekturradien müssen größer als 0 sein.');
+                    if (mode === 'drill' && (!validPositive(corr.k1.d) || !validPositive(corr.k1.rho) || !finite(corr.k1.tip) || corr.k1.tip <= 0 || corr.k1.tip >= 180)) validationErrors.push('Bohrerdurchmesser und Dichte müssen größer als 0 sein; der Spitzenwinkel muss zwischen 0° und 180° liegen.');
+                    if (validationErrors.length > 0) return { ...emptyResults, error: validationErrors.join(' ') };
+
+                    const getOffsetAt = (z, zs, ze, o1, o2) => {
+                        const len = ze - zs; if (len <= 0.0001) return o1;
+                        const ratio = (z - zs) / len;
+                        const x = toCart(o1.r, o1.ang).x + (toCart(o2.r, o2.ang).x - toCart(o1.r, o1.ang).x) * ratio;
+                        const y = toCart(o1.r, o1.ang).y + (toCart(o2.r, o2.ang).y - toCart(o1.r, o1.ang).y) * ratio;
+                        const p = toPolar(x, y); 
+                        return { r: p.mag, ang: p.angle }; 
+                    };
+
+                    const calcSolid = (R, rho, zs, ze, o1, o2) => {
+                        const L = ze-zs; if(L<=0) return {Ux:0,Uy:0,Mx:0,My:0,Mass:0};
+                        const vol = Math.PI*R*R*L, m = vol*rho*0.001;
+                        const c1 = toCart(o1.r, o1.ang), c2 = toCart(o2.r, o2.ang);
+                        const Bx = (c2.x-c1.x)/L, Ax = c1.x - Bx*zs;
+                        const By = (c2.y-c1.y)/L, Ay = c1.y - By*zs;
+                        const i1 = L, iz = intZ(zs,ze), iz2 = intZ2(zs,ze);
+                        const f = rho*0.001*Math.PI*R*R;
+                        return {
+                            Ux: f*(Ax*i1 + Bx*iz), Uy: f*(Ay*i1 + By*iz),
+                            Mx: f*(Ax*iz + Bx*iz2), My: f*(Ay*iz + By*iz2), Mass: m
+                        };
+                    };
+
+                    const rS = calcSolid(shaft.d/2, shaft.rho, 0, shaft.len, {r:0,ang:0}, {r:0,ang:0});
+                    const c1o = calcSolid(cyl1.d_outer/2, cyl1.rho, cyl1.zStart, cyl1.zEnd, cyl1.offset1, cyl1.offset2);
+                    const c1i = calcSolid(shaft.d/2, cyl1.rho, cyl1.zStart, cyl1.zEnd, {r:0,ang:0}, {r:0,ang:0});
+                    const rC1 = {Ux:c1o.Ux-c1i.Ux, Uy:c1o.Uy-c1i.Uy, Mx:c1o.Mx-c1i.Mx, My:c1o.My-c1i.My, Mass:c1o.Mass-c1i.Mass};
+
+                    let rC2 = {Ux:0, Uy:0, Mx:0, My:0, Mass:0};
+                    const addC2 = (zs, ze, type) => {
+                        const os = getOffsetAt(zs, cyl2.zStart, cyl2.zEnd, cyl2.offset1, cyl2.offset2);
+                        const oe = getOffsetAt(ze, cyl2.zStart, cyl2.zEnd, cyl2.offset1, cyl2.offset2); 
+                        const out = calcSolid(cyl2.d_outer/2, cyl2.rho, zs, ze, os, oe);
+                        
+                        let inR = shaft.d/2, inOff1 = {r:0,ang:0}, inOff2 = {r:0,ang:0};
+                        if(type === 'overlap') {
+                            inR = cyl1.d_outer/2;
+                            inOff1 = getOffsetAt(zs, cyl1.zStart, cyl1.zEnd, cyl1.offset1, cyl1.offset2);
+                            inOff2 = getOffsetAt(ze, cyl1.zStart, cyl1.zEnd, cyl1.offset1, cyl1.offset2);
+                        } else if(type === 'hollow') {
+                            inR = cyl1.d_outer/2;
+                            inOff1 = getOffsetAt(zs, cyl1.zStart, cyl1.zEnd, cyl1.offset1, cyl1.offset2);
+                            inOff2 = getOffsetAt(ze, cyl1.zStart, cyl1.zEnd, cyl1.offset1, cyl1.offset2);
+                        }
+                        
+                        const hole = calcSolid(inR, cyl2.rho, zs, ze, inOff1, inOff2);
+                        rC2.Ux += out.Ux - hole.Ux; rC2.Uy += out.Uy - hole.Uy;
+                        rC2.Mx += out.Mx - hole.Mx; rC2.My += out.My - hole.My;
+                        rC2.Mass += out.Mass - hole.Mass;
+                    };
+
+                    if(cyl2.zStart < cyl1.zStart) addC2(cyl2.zStart, Math.min(cyl2.zEnd, cyl1.zStart), cyl2.gapMode==='hollow'?'hollow':'shaft');
+                    const ovS = Math.max(cyl2.zStart, cyl1.zStart), ovE = Math.min(cyl2.zEnd, cyl1.zEnd);
+                    if(ovE > ovS) addC2(ovS, ovE, 'overlap');
+                    if(cyl2.zEnd > cyl1.zEnd) addC2(Math.max(cyl2.zStart, cyl1.zEnd), cyl2.zEnd, cyl2.gapMode==='hollow'?'hollow':'shaft');
+
+                    const tUx = rS.Ux + rC1.Ux + rC2.Ux;
+                    const tUy = rS.Uy + rC1.Uy + rC2.Uy;
+                    const tMx = rS.Mx + rC1.Mx + rC2.Mx;
+                    const tMy = rS.My + rC1.My + rC2.My;
+                    const tMass = rS.Mass + rC1.Mass + rC2.Mass;
+
+                    const dz = corr.k2.z - corr.k1.z;
+                    let uk2x=0, uk2y=0;
+                    if(Math.abs(dz)>1e-3) {
+                        uk2x = (-tMx + tUx*corr.k1.z)/dz; uk2y = (-tMy + tUy*corr.k1.z)/dz;
+                    }
+                    const uk1x = -tUx - uk2x, uk1y = -tUy - uk2y;
+                    const resK1 = toPolar(uk1x, uk1y), resK2 = toPolar(uk2x, uk2y);
+                    const mK1 = resK1.mag / (corr.k1.r||1), mK2 = resK2.mag / (corr.k2.r||1);
+
+                    const calcDrill = (m, d, rho, ang) => {
+                        if(d<=0) return 0;
+                        const r=d/2, rho_mm = rho/1000, V = m/rho_mm;
+                        const h_cone = r/Math.tan(toRad(ang/2));
+                        const V_cone = (Math.PI*r*r*h_cone)/3;
+                        return V<=V_cone ? h_cone*Math.cbrt(V/V_cone) : h_cone + (V-V_cone)/(Math.PI*r*r);
+                    };
+                    const dK1 = calcDrill(mK1, corr.k1.d, corr.k1.rho, corr.k1.tip);
+                    const dK2 = calcDrill(mK2, corr.k2.d, corr.k2.rho, corr.k2.tip);
+
+                    // Lagerkräfte
+                    const L = bearings.zB - bearings.zA;
+                    const MaX = tMx - tUx*bearings.zA, MaY = tMy - tUy*bearings.zA;
+                    const Fbx = -MaX/L, Fby = -MaY/L;
+                    const Fax = -tUx - Fbx, Fay = -tUy - Fby;
+
+                    const om = 2*Math.PI*rpm/60, Uper = (om>0&&tMass>0) ? (iso/om)*tMass : 0;
+                    const Ustat = toPolar(tUx, tUy).mag;
+
+                    return {
+                        components: { shaft: {Mass: rS.Mass}, cyl1: {Mass: rC1.Mass}, cyl2: {Mass: rC2.Mass} },
+                        total: { Mass: tMass },
+                        staticRes: { mag: Ustat },
+                        iso: { u_permissible: Uper, isWithinTolerance: Ustat<=Uper },
+                        momentRes: toPolar(tMx, tMy),
+                        bearingA: toPolar(Fax, Fay), bearingB: toPolar(Fbx, Fby),
+                        k1: { m: mK1, a: resK1.angle, d: dK1, aDrill: (resK1.angle+180)%360 },
+                        k2: { m: mK2, a: resK2.angle, d: dK2, aDrill: (resK2.angle+180)%360 }
+                    };
+
+                } catch(e) { console.error(e); return null; }
+
+            }, [shaft, cyl1, cyl2, bearings, corr, rpm, iso, mode]);
+
+            // PDF
+            const doPdf = async () => {
+                setIsExporting(true);
+                const wait = ms => new Promise(r => setTimeout(r, ms));
+                try {
+                    const pdf = new window.jspdf.jsPDF('l', 'mm', 'a4');
+                    
+                    document.body.classList.add('printing-p1');
+                    await wait(150); 
+                    const p1 = document.getElementById('print-page-1');
+                    const c1 = await html2canvas(p1, {scale:2, backgroundColor:'#fff'});
+                    pdf.addImage(c1.toDataURL('image/png'), 'PNG', 0, 0, 297, 210);
+                    document.body.classList.remove('printing-p1');
+
+                    pdf.addPage();
+
+                    document.body.classList.add('printing-p2');
+                    await wait(150);
+                    const p2 = document.getElementById('print-page-2');
+                    const c2 = await html2canvas(p2, {scale:2, backgroundColor:'#fff'});
+                    pdf.addImage(c2.toDataURL('image/png'), 'PNG', 0, 0, 297, 210);
+                    
+                    document.body.classList.remove('printing-p2');
+                    pdf.save('Wuchtprotokoll.pdf');
+                } catch(e) { 
+                    alert("PDF Fehler: "+e); 
+                    document.body.classList.remove('printing-p1');
+                    document.body.classList.remove('printing-p2');
+                }
+                setIsExporting(false);
+            };
+
+            // VIZ Helper
+            const maxD = Math.max(shaft.d, cyl1.d_outer, cyl2.d_outer) * 1.5;
+            const scale = (150/maxD) * zoom;
+            
+            const poly = (z1,z2,d,o1,o2,m) => {
+                const f = m==='sin'?Math.sin:Math.cos;
+                const y1 = -o1.r*f(toRad(o1.ang))*scale*exzScale, y2 = -o2.r*f(toRad(o2.ang))*scale*exzScale;
+                const x1 = (z1/shaft.len)*500, x2 = (z2/shaft.len)*500, h = d/2*scale, cy = 100;
+                return `${x1},${cy+y1-h} ${x2},${cy+y2-h} ${x2},${cy+y2+h} ${x1},${cy+y1+h}`;
+            };
+            const mark = (z,r,a,m) => {
+                const f = m==='sin'?Math.sin:Math.cos;
+                const x = (z/shaft.len)*500;
+                const off = -r*scale*f(toRad(a));
+                return <circle cx={x} cy={100+off} r={4} fill={m==='sin'?'#ef4444':'#3b82f6'}/>
+            };
+            
+            // Neuer Helfer für Lagervisualisierung
+            const bearingMark = (z, label) => {
+                const x = (z/shaft.len)*500;
+                const y = 100; // Center axis
+                // Ein violettes Dreieck als Lager-Symbol
+                return (
+                    <g transform={`translate(${x},${y})`}>
+                        <polygon points="-6,12 6,12 0,0" fill="#6366f1" />
+                        <text x="0" y="24" textAnchor="middle" fontSize="10" fill="#6366f1" fontWeight="bold">{label}</text>
+                    </g>
+                );
+            };
+
+            if(!results) return <div className="max-w-3xl mx-auto mt-8 p-4 bg-red-50 text-red-800 border border-red-200 rounded-lg"><h2 className="font-bold">Berechnungsfehler</h2><p className="mt-1 text-sm">Bitte Eingaben prüfen.</p></div>;
+
+            return (
+                <div className="max-w-7xl mx-auto p-4 min-h-screen" id="dashboard">
+                    {results.error && <div className="mb-4 p-4 bg-red-50 text-red-800 border border-red-200 rounded-lg"><h2 className="font-bold">Eingaben prüfen</h2><p className="mt-1 text-sm">{results.error}</p></div>}
+                    {/* --- HIDDEN PRINT PAGES --- */}
+                    <div id="print-page-1" className="print-container">
+                        <div className="print-header"><div className="print-title">Wuchtprotokoll</div><div className="print-meta">{new Date().toLocaleString()}</div></div>
+                        <div className="print-section">1. Geometrie</div>
+                        <table className="print-table">
+                            <thead><tr><th>Teil</th><th>Z-Pos</th><th>Geometrie</th><th>Masse</th><th>Exzentrizität</th></tr></thead>
+                            <tbody>
+                                <tr><td>Achse</td><td>0-{shaft.len}</td><td>Ø{shaft.d}, {shaft.rho}</td><td>{results.components.shaft.Mass.toFixed(1)} g</td><td>-</td></tr>
+                                <tr><td>Zyl 1</td><td>{cyl1.zStart}-{cyl1.zEnd}</td><td>AD{cyl1.d_outer}, {cyl1.rho}</td><td>{results.components.cyl1.Mass.toFixed(1)} g</td><td>Versatz Start:{cyl1.offset1.r}@{cyl1.offset1.ang}° / Ende:{cyl1.offset2.r}@{cyl1.offset2.ang}°</td></tr>
+                                <tr><td>Zyl 2</td><td>{cyl2.zStart}-{cyl2.zEnd}</td><td>AD{cyl2.d_outer}, {cyl2.rho}</td><td>{results.components.cyl2.Mass.toFixed(1)} g</td><td>Versatz Start:{cyl2.offset1.r}@{cyl2.offset1.ang}° / Ende:{cyl2.offset2.r}@{cyl2.offset2.ang}°</td></tr>
+                            </tbody>
+                        </table>
+                        <div className="print-section">2. Ergebnisse</div>
+                        <table className="print-table">
+                            <tbody>
+                                <tr><td>Gesamtmasse</td><td>{results.total.Mass.toFixed(1)} g</td><td>Stat. Unwucht</td><td>{results.staticRes.mag.toFixed(2)} gmm</td></tr>
+                                <tr><td>Zulässig</td><td>{results.iso.u_permissible.toFixed(2)} gmm</td><td>Moment</td><td>{(results.momentRes.mag/1000).toFixed(2)} kgmm²</td></tr>
+                            </tbody>
+                        </table>
+                        <div className="print-footer">Seite 1/2</div>
+                    </div>
+
+                    <div id="print-page-2" className="print-container">
+                        <div className="print-header"><div className="print-title">Anweisung</div></div>
+                        <div style={{border:'2px solid #ccc', padding:'12px 20px', textAlign:'center', marginBottom:'14px'}}>
+                            <h2 style={{fontSize:'20px', fontWeight:'bold', color: mode==='drill'?'#b91c1c':'#1e40af', marginBottom:'10px'}}>{mode==='drill'?'BOHRANWEISUNG':'GEWICHTE'}</h2>
+                            <div style={{display:'flex', justifyContent:'space-around'}}>
+                                <div><div style={{fontSize:'11px', fontWeight:'bold', color:'#666'}}>K1 (z={corr.k1.z})</div><div style={{fontSize:'28px', fontWeight:'bold', fontFamily:'monospace'}}>{mode==='drill'?results.k1.d.toFixed(2):results.k1.m.toFixed(3)} {mode==='drill'?'mm':'g'}</div><div>@ {mode==='drill'?results.k1.aDrill.toFixed(1):results.k1.a.toFixed(1)}°</div></div>
+                                <div><div style={{fontSize:'11px', fontWeight:'bold', color:'#666'}}>K2 (z={corr.k2.z})</div><div style={{fontSize:'28px', fontWeight:'bold', fontFamily:'monospace'}}>{mode==='drill'?results.k2.d.toFixed(2):results.k2.m.toFixed(3)} {mode==='drill'?'mm':'g'}</div><div>@ {mode==='drill'?results.k2.aDrill.toFixed(1):results.k2.a.toFixed(1)}°</div></div>
+                            </div>
+                        </div>
+                        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px'}}>
+                            <div style={{border:'1px solid #eee', padding:'4px'}}>
+                                <div style={{fontSize:'11px', fontWeight:'bold', color:'#475569', textAlign:'center'}}>Schnitt (X-Y)</div>
+                                <svg width="100%" height="145" viewBox="-150 -150 300 300" preserveAspectRatio="xMidYMid meet">
+                                    <line x1="-150" y1="0" x2="150" y2="0" stroke="#cbd5e1" /><line x1="0" y1="-150" x2="0" y2="150" stroke="#cbd5e1" />
+                                    <circle cx="0" cy="0" r={shaft.d/2*scale} fill="none" stroke="#64748b" strokeWidth="1.5" />
+                                    {(()=>{ const r=(cyl1.offset1.r+cyl1.offset2.r)/2*scale*exzScale; const a=toRad((cyl1.offset1.ang+cyl1.offset2.ang)/2); return <circle cx={r*Math.cos(a)} cy={-r*Math.sin(a)} r={cyl1.d_outer/2*scale} fill="none" stroke="#ea580c" strokeWidth="2"/> })()}
+                                    {(()=>{ const r=(cyl2.offset1.r+cyl2.offset2.r)/2*scale*exzScale; const a=toRad((cyl2.offset1.ang+cyl2.offset2.ang)/2); return <circle cx={r*Math.cos(a)} cy={-r*Math.sin(a)} r={cyl2.d_outer/2*scale} fill="none" stroke="#16a34a" strokeWidth="2"/> })()}
+                                    {[results.k1, results.k2].map((k,i) => { const ang = mode==='drill' ? k.aDrill : k.a; const r = (i===0?corr.k1.r:corr.k2.r)*scale; return <g transform={`translate(${r*Math.cos(toRad(ang))},${-r*Math.sin(toRad(ang))})`} key={i}><circle r="3" fill="#111827"/><text fontSize="10" fill="#111827" dx="5" dy="5">K{i+1}</text></g> })}
+                                </svg>
+                            </div>
+                            {['sin', 'cos'].map(m => (
+                                <div key={m} style={{border:'1px solid #eee', padding:'4px'}}>
+                                    <div style={{fontSize:'11px', fontWeight:'bold', color:'#475569', textAlign:'center'}}>{m==='sin'?'Seite (Y-Z)':'Draufsicht (X-Z)'}</div>
+                                    <svg width="100%" height="145" viewBox="0 0 500 200" preserveAspectRatio="none">
+                                        <line x1="0" y1="100" x2="500" y2="100" stroke="#cbd5e1" strokeDasharray="4" />
+                                        <polygon points={poly(0, shaft.len, shaft.d, {r:0,ang:0}, {r:0,ang:0}, m)} fill="#cbd5e1" />
+                                        <polygon points={poly(cyl1.zStart, cyl1.zEnd, cyl1.d_outer, cyl1.offset1, cyl1.offset2, m)} fill="rgba(249,115,22,0.5)" stroke="#ea580c" />
+                                        <polygon points={poly(cyl2.zStart, cyl2.zEnd, cyl2.d_outer, cyl2.offset1, cyl2.offset2, m)} fill="rgba(34,197,94,0.5)" stroke="#16a34a" />
+                                        {bearingMark(bearings.zA, "A")}
+                                        {bearingMark(bearings.zB, "B")}
+                                        {mark(corr.k1.z, corr.k1.r, mode==='drill'?results.k1.aDrill:results.k1.a, m)}
+                                        {mark(corr.k2.z, corr.k2.r, mode==='drill'?results.k2.aDrill:results.k2.a, m)}
+                                    </svg>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="print-footer">Seite 2/2</div>
+                    </div>
+
+                    {/* HEADER UI */}
+                    <div className="bg-white p-4 rounded shadow mb-6 flex flex-wrap justify-between items-center">
+                        <div className="flex items-center gap-4">
+                            <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                                <Icon d={Icons.Layer} size={28} className="text-blue-600"/> Unwucht-Rechner MS v7
+                            </h1>
+                            <span className={`px-3 py-1 rounded text-sm font-bold border ${results.iso.isWithinTolerance?'bg-green-100 text-green-800 border-green-200':'bg-red-100 text-red-800 border-red-200'}`}>
+                                ISO {iso}: {results.iso.isWithinTolerance ? "i.O." : "n.i.O."}
+                            </span>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={()=>setShowHelp(true)} className="p-2 text-slate-400 hover:text-blue-600"><Icon d={Icons.Eye} size={24}/></button>
+                            <button onClick={doPdf} disabled={isExporting} className="bg-slate-800 text-white px-4 py-2 rounded flex items-center gap-2 hover:bg-slate-700">{isExporting?"...":<><Icon d={Icons.Save} size={16} col="white"/> PDF Export</>}</button>
+                        </div>
+                    </div>
+                    
+                    <div className="flex flex-col lg:flex-row gap-6">
+                        {/* LINKS */}
+                        <div className="w-full lg:w-1/3 space-y-4">
+                            <Section title="1. Basis-Achse">
+                                <InputRow label="Länge" val={shaft.len} set={v=>setShaft(p=>({...p, len:v}))} unit="mm"/>
+                                <InputRow label="Durchmesser" val={shaft.d} set={v=>setShaft(p=>({...p, d:v}))} unit="mm"/>
+                                <InputRow label="Dichte" val={shaft.rho} set={v=>setShaft(p=>({...p, rho:v}))} unit="g/cm³"/>
+                                <div className="text-xs text-right mt-1 text-slate-400">Masse: {results.components.shaft.Mass.toFixed(1)} g</div>
+                            </Section>
+
+                            <Section title="2. Zylinder 1 (Innen)" col="orange">
+                                <InputRow label="Start Z" val={cyl1.zStart} set={v=>setCyl1(p=>({...p, zStart:v}))} unit="mm"/>
+                                <InputRow label="Ende Z" val={cyl1.zEnd} set={v=>setCyl1(p=>({...p, zEnd:v}))} unit="mm"/>
+                                <InputRow label="Außen Ø" val={cyl1.d_outer} set={v=>setCyl1(p=>({...p, d_outer:v}))} unit="mm"/>
+                                <InputRow label="Dichte" val={cyl1.rho} set={v=>setCyl1(p=>({...p, rho:v}))} unit="g/cm³"/>
+                                <div className="mt-2 pt-2 border-t">
+                                    <div className="text-xs mb-1 text-slate-500">Versatz Start (r/φ)</div><OffsetInput label="" obj={cyl1.offset1} setObj={v=>setCyl1(p=>({...p, offset1:v}))}/>
+                                    <div className="text-xs mb-1 text-slate-500 mt-2">Versatz Ende (r/φ)</div><OffsetInput label="" obj={cyl1.offset2} setObj={v=>setCyl1(p=>({...p, offset2:v}))}/>
+                                </div>
+                                <div className="text-xs text-right mt-1 text-orange-400">Masse: {results.components.cyl1.Mass.toFixed(1)} g</div>
+                            </Section>
+
+                            <Section title="3. Zylinder 2 (Außen)" col="green">
+                                <InputRow label="Start Z" val={cyl2.zStart} set={v=>setCyl2(p=>({...p, zStart:v}))} unit="mm"/>
+                                <InputRow label="Ende Z" val={cyl2.zEnd} set={v=>setCyl2(p=>({...p, zEnd:v}))} unit="mm"/>
+                                <InputRow label="Außen Ø" val={cyl2.d_outer} set={v=>setCyl2(p=>({...p, d_outer:v}))} unit="mm"/>
+                                <InputRow label="Dichte" val={cyl2.rho} set={v=>setCyl2(p=>({...p, rho:v}))} unit="g/cm³"/>
+                                <div className="flex justify-between py-1 text-xs text-slate-600"><span>Überhang</span><select value={cyl2.gapMode} onChange={e=>setCyl2(p=>({...p, gapMode:e.target.value}))} className="border rounded"><option value="shaft">Voll</option><option value="hollow">Hohl</option></select></div>
+                                <div className="mt-2 pt-2 border-t">
+                                    <div className="text-xs mb-1 text-slate-500">Versatz Start (r/φ)</div><OffsetInput label="" obj={cyl2.offset1} setObj={v=>setCyl2(p=>({...p, offset1:v}))}/>
+                                    <div className="text-xs mb-1 text-slate-500 mt-2">Versatz Ende (r/φ)</div><OffsetInput label="" obj={cyl2.offset2} setObj={v=>setCyl2(p=>({...p, offset2:v}))}/>
+                                </div>
+                                <div className="text-xs text-right mt-1 text-green-600">Masse: {results.components.cyl2.Mass.toFixed(1)} g</div>
+                            </Section>
+
+                            <Section title="Lager & Wuchten" col="indigo">
+                                <div className="flex justify-between mb-2"><span className="text-sm">Modus</span><select value={mode} onChange={e=>setMode(e.target.value)} className="border rounded text-sm"><option value="mass">Gewichte</option><option value="drill">Bohren</option></select></div>
+                                <div className="grid grid-cols-2 gap-2 text-xs mb-2"><div>K1 z={corr.k1.z} | r={corr.k1.r}</div><div>K2 z={corr.k2.z} | r={corr.k2.r}</div></div>
+                                {/* STABLE INPUTS */}
+                                {mode==='drill'&&<div className="border-t pt-2 mb-2 grid grid-cols-2 gap-2 text-xs"><InputRow label="Bohrer" val={corr.k1.d} set={v=>setCorr(p=>({...p, k1:{...p.k1, d:v}, k2:{...p.k2, d:v}}))} unit="mm"/><InputRow label="Spitze" val={corr.k1.tip} set={v=>setCorr(p=>({...p, k1:{...p.k1, tip:v}, k2:{...p.k2, tip:v}}))} unit="°"/><div className="col-span-2"><InputRow label="Dichte" val={corr.k1.rho} set={v=>setCorr(p=>({...p, k1:{...p.k1, rho:v}, k2:{...p.k2, rho:v}}))} unit="g/cm³"/></div></div>}
+                                <div className="mt-2 pt-2 border-t grid grid-cols-2 gap-2">
+                                    <InputRow label="K1 z" val={corr.k1.z} set={v=>setCorr(p=>({...p, k1:{...p.k1, z:v}}))} unit="mm"/>
+                                    <InputRow label="K2 z" val={corr.k2.z} set={v=>setCorr(p=>({...p, k2:{...p.k2, z:v}}))} unit="mm"/>
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-2">
+                                    <InputRow label="K1 r" val={corr.k1.r} set={v=>setCorr(p=>({...p, k1:{...p.k1, r:v}}))} unit="mm"/>
+                                    <InputRow label="K2 r" val={corr.k2.r} set={v=>setCorr(p=>({...p, k2:{...p.k2, r:v}}))} unit="mm"/>
+                                </div>
+                                <div className="mt-2 border-t pt-2 grid grid-cols-2 gap-2">
+                                    <InputRow label="Lager A" val={bearings.zA} set={v=>setBearings(p=>({...p, zA:v}))} unit="mm"/>
+                                    <InputRow label="Lager B" val={bearings.zB} set={v=>setBearings(p=>({...p, zB:v}))} unit="mm"/>
+                                </div>
+                                <div className="mt-2 pt-2 border-t"><InputRow label="Drehzahl" val={rpm} set={setRpm} unit="min⁻¹"/></div>
+                                <div className="mt-2 pt-2 border-t flex justify-between items-center"><span className="text-xs">Güteklasse</span><select value={iso} onChange={e=>setIso(e.target.value)} className="text-xs border rounded"><option value="0.4">G 0.4</option><option value="1">G 1.0</option><option value="2.5">G 2.5</option><option value="6.3">G 6.3</option><option value="16">G 16</option></select></div>
+                            </Section>
+                        </div>
+
+                        {/* RECHTS */}
+                        <div className="w-full lg:w-2/3 space-y-6">
+                            <div className={`p-6 rounded-xl shadow-lg text-white flex flex-col md:flex-row justify-between items-center ${mode==='drill'?'bg-red-600':'bg-indigo-600'}`}>
+                                <div className="flex items-center gap-4 mb-4 md:mb-0">
+                                    <div className="p-3 bg-white/20 rounded-full"><Icon d={mode==='drill'?Icons.Drill:Icons.Wrench} size={32} col="white"/></div>
+                                    <div><h2 className="text-xl font-bold">{mode==='drill'?'Bohranweisung':'Wuchtempfehlung'}</h2><p className="opacity-80 text-sm">{mode==='drill'?'Subtraktion (Tiefe)':'Addition (Masse)'}</p></div>
+                                </div>
+                                <div className="flex gap-8 text-center">
+                                    <div><div className="text-xs opacity-70 font-bold uppercase mb-1">Ebene K1</div><div className="text-4xl font-mono font-bold">{mode==='drill'?results.k1.d.toFixed(2):results.k1.m.toFixed(3)} <span className="text-lg">{mode==='drill'?'mm':'g'}</span></div><div className="text-sm bg-black/20 rounded px-2 py-1 mt-1">@ {mode==='drill'?results.k1.aDrill.toFixed(1):results.k1.a.toFixed(1)}°</div></div>
+                                    <div className="w-px bg-white/30"></div>
+                                    <div><div className="text-xs opacity-70 font-bold uppercase mb-1">Ebene K2</div><div className="text-4xl font-mono font-bold">{mode==='drill'?results.k2.d.toFixed(2):results.k2.m.toFixed(3)} <span className="text-lg">{mode==='drill'?'mm':'g'}</span></div><div className="text-sm bg-black/20 rounded px-2 py-1 mt-1">@ {mode==='drill'?results.k2.aDrill.toFixed(1):results.k2.a.toFixed(1)}°</div></div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="bg-slate-800 rounded-lg h-[320px] relative overflow-hidden flex flex-col border border-slate-700">
+                                    <div className="absolute top-2 left-2 text-white/50 text-xs">Schnitt (X-Y)</div>
+                                    <div className="absolute top-2 right-2 z-10 w-32"><div className="text-white/50 text-[10px] text-right">Exz: {exzScale}x</div><input type="range" min="1" max="50" value={exzScale} onChange={e=>setExzScale(Number(e.target.value))}/></div>
+                                    <div className="flex-1 flex justify-center items-center canvas-grid">
+                                        <svg width="300" height="300" viewBox="-150 -150 300 300">
+                                            <line x1="-150" y1="0" x2="150" y2="0" stroke="rgba(255,255,255,0.1)" /><line x1="0" y1="-150" x2="0" y2="150" stroke="rgba(255,255,255,0.1)" />
+                                            <circle cx="0" cy="0" r={shaft.d/2*scale} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1" />
+                                            {(()=>{ const r=(cyl1.offset1.r+cyl1.offset2.r)/2*scale*exzScale; const a=toRad((cyl1.offset1.ang+cyl1.offset2.ang)/2); return <circle cx={r*Math.cos(a)} cy={-r*Math.sin(a)} r={cyl1.d_outer/2*scale} fill="none" stroke="#fb923c" strokeWidth="2"/> })()}
+                                            {(()=>{ const r=(cyl2.offset1.r+cyl2.offset2.r)/2*scale*exzScale; const a=toRad((cyl2.offset1.ang+cyl2.offset2.ang)/2); return <circle cx={r*Math.cos(a)} cy={-r*Math.sin(a)} r={cyl2.d_outer/2*scale} fill="none" stroke="#4ade80" strokeWidth="2"/> })()}
+                                            {[results.k1, results.k2].map((k,i) => { const ang = mode==='drill' ? k.aDrill : k.a; const r = (i===0?corr.k1.r:corr.k2.r)*scale; return <g transform={`translate(${r*Math.cos(toRad(ang))},${-r*Math.sin(toRad(ang))})`} key={i}><circle r="3" fill="white"/><text fontSize="10" fill="white" dx="5" dy="5">K{i+1}</text></g> })}
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col gap-4 h-[320px]">
+                                    {['sin', 'cos'].map(m => (
+                                        <div key={m} className="bg-slate-900 rounded-lg flex-1 relative overflow-hidden border border-slate-700">
+                                            <div className="absolute top-1 left-2 text-white/40 text-[10px]">{m==='sin'?'Seite (Y-Z)':'Draufsicht (X-Z)'}</div>
+                                            <svg width="100%" height="100%" viewBox="0 0 500 200" preserveAspectRatio="none">
+                                                <line x1="0" y1="100" x2="500" y2="100" stroke="#94a3b8" strokeDasharray="4" />
+                                                <polygon points={poly(0, shaft.len, shaft.d, {r:0,ang:0}, {r:0,ang:0}, m)} fill="#64748b" />
+                                                <polygon points={poly(cyl1.zStart, cyl1.zEnd, cyl1.d_outer, cyl1.offset1, cyl1.offset2, m)} fill="rgba(251,146,60,0.4)" stroke="#fb923c"/>
+                                                <polygon points={poly(cyl2.zStart, cyl2.zEnd, cyl2.d_outer, cyl2.offset1, cyl2.offset2, m)} fill="rgba(74,222,128,0.4)" stroke="#4ade80"/>
+                                                
+                                                {/* VISUALISIERUNG: Lager A und B als Dreiecke */}
+                                                {bearingMark(bearings.zA, "A")}
+                                                {bearingMark(bearings.zB, "B")}
+
+                                                {mark(corr.k1.z, corr.k1.r, mode==='drill'?results.k1.aDrill:results.k1.a, m)}
+                                                {mark(corr.k2.z, corr.k2.r, mode==='drill'?results.k2.aDrill:results.k2.a, m)}
+                                            </svg>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <Section title="Resultierende">
+                                    <div className="flex justify-between text-sm py-1"><span>Gesamtmasse</span><b>{results.total.Mass.toFixed(1)} g</b></div>
+                                    <div className="flex justify-between text-sm py-1"><span>Statisch</span><b className={results.iso.isWithinTolerance?'text-green-600':'text-red-600'}>{results.staticRes.mag.toFixed(2)} gmm</b></div>
+                                    <div className="flex justify-between text-xs text-slate-400"><span>Zulässig (ISO)</span>{results.iso.u_permissible.toFixed(2)} gmm</div>
+                                    <div className="flex justify-between text-sm py-1"><span>Moment</span><b>{(results.momentRes.mag/1000).toFixed(2)} kgmm²</b></div>
+                                </Section>
+                                <Section title="Lagerkräfte Analyse">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-xs text-left">
+                                            <thead>
+                                                <tr className="border-b border-slate-200">
+                                                    <th className="pb-1 text-slate-500 font-normal">Lager</th>
+                                                    <th className="pb-1 text-slate-500 font-normal text-right">Pos z</th>
+                                                    <th className="pb-1 text-slate-500 font-normal text-right">F<sub>dyn</sub></th>
+                                                    <th className="pb-1 text-slate-500 font-normal text-right">U<sub>res</sub></th>
+                                                    <th className="pb-1 text-slate-500 font-normal text-right">φ</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr className="border-b border-slate-100">
+                                                    <td className="py-2 font-bold text-slate-700">A</td>
+                                                    <td className="py-2 text-right font-mono">{bearings.zA.toFixed(1)}</td>
+                                                    <td className="py-2 text-right font-mono font-bold text-blue-600">{calculateForce(results.bearingA.mag, rpm).toFixed(2)} N</td>
+                                                    <td className="py-2 text-right font-mono">{results.bearingA.mag.toFixed(1)} gmm</td>
+                                                    <td className="py-2 text-right font-mono">{results.bearingA.angle.toFixed(1)}°</td>
+                                                </tr>
+                                                <tr>
+                                                    <td className="py-2 font-bold text-slate-700">B</td>
+                                                    <td className="py-2 text-right font-mono">{bearings.zB.toFixed(1)}</td>
+                                                    <td className="py-2 text-right font-mono font-bold text-blue-600">{calculateForce(results.bearingB.mag, rpm).toFixed(2)} N</td>
+                                                    <td className="py-2 text-right font-mono">{results.bearingB.mag.toFixed(1)} gmm</td>
+                                                    <td className="py-2 text-right font-mono">{results.bearingB.angle.toFixed(1)}°</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </Section>
+                            </div>
+                        </div>
+                    </div>
+                    {showHelp && <HelpModal onClose={()=>setShowHelp(false)}/>}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<ErrorBoundary><App /></ErrorBoundary>);
+    </script>
+</body>
+</html>
